@@ -1,0 +1,50 @@
+{
+  "svelte.enable-ts-plugin": true,
+
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "always",
+    "source.organizeImports": "always"
+  },
+  "terminal.integrated.env.osx": {
+    "PATH": "${env:HOME}/.cargo/bin:${env:HOME}/.local/share/mise/shims:${env:PATH}"
+  },
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.expand": false,
+  "explorer.fileNesting.patterns": {
+    "*.ts": "${capture}.js",
+    "*.js": "${capture}.js.map, ${capture}.min.js, ${capture}.d.ts",
+    "*.svelte": "${capture}.svelte.ts",
+    "Cargo.toml": "Cargo.lock, rust-toolchain.toml, clippy.toml, rustfmt.toml",
+    "package.json": "package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lockb",
+    "*.go": "${capture}_test.go, ${capture}_integration_test.go, ${capture}_e2e_test.go"
+  },
+  "[go]": {
+    "editor.defaultFormatter": "golang.go",
+    "editor.formatOnSave": true
+  },
+  "go.formatTool": "goimports",
+  "go.formatFlags": ["-local", "github.com/stwcp/GoThrough"],
+
+  "gopls": {
+    "local": "github.com/stwcp/GoThrough"
+  },
+
+  "go.toolsEnvVars": {
+    "GOTOOLCHAIN": "go1.26.2"
+  },
+
+  "go.alternateTools": {
+    "gopls": "${workspaceFolder}/tools/gopls",
+    "dlv": "${workspaceFolder}/tools/dlv",
+    "golangci-lint": "${workspaceFolder}/tools/golangci-lint",
+    "goimports": "${workspaceFolder}/tools/goimports",
+    "govulncheck": "${workspaceFolder}/tools/govulncheck"
+  },
+
+  "files.exclude": {
+    "**/.git": true,
+    "public/**": true
+  }
+}
