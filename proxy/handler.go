@@ -21,6 +21,16 @@ func (p *Pipeline) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	r = ensureMetadata(r)
 
+	var err error
+	r, err = captureRequestBody(r)
+	if err != nil {
+		log.Printf("proxy body capture error: %v", err)
+		writeMaskedError(w, http.StatusBadGateway, "upstream request failed")
+		return
+	}
+	r = attachCapturedBody(r)
+	defer releaseCapturedBody(r)
+
 	if err := p.runRequestPhase(w, r); err != nil {
 		if errors.Is(err, errShortCircuited) {
 			return
@@ -56,29 +66,6 @@ var errShortCircuited = errors.New("request short-circuited")
 func (p *Pipeline) runRequestPhase(w http.ResponseWriter, r *http.Request) error {
 	reqChains, _ := p.snapshotChains()
 
-	needsBody := false
-	for _, chain := range reqChains {
-		matcher, interceptors, _ := chain.snapshot()
-		if matcher != nil && !matcher.Matches(r) {
-			continue
-		}
-		if len(interceptors) > 0 && r.Body != nil && r.Body != http.NoBody {
-			needsBody = true
-		}
-	}
-
-	var bodyBytes []byte
-	if needsBody {
-		var err error
-		bodyBytes, err = readAllPooled(r.Body)
-		r.Body.Close()
-		if err != nil {
-			return err
-		}
-		r.Body = bodyReader(bodyBytes)
-		r.ContentLength = int64(len(bodyBytes))
-	}
-
 	for _, chain := range reqChains {
 		matcher, interceptors, tappers := chain.snapshot()
 		if matcher != nil && !matcher.Matches(r) {
@@ -100,11 +87,6 @@ func (p *Pipeline) runRequestPhase(w http.ResponseWriter, r *http.Request) error
 				return errShortCircuited
 			}
 		}
-	}
-
-	if len(bodyBytes) > 0 {
-		r.Body = bodyReader(bodyBytes)
-		r.ContentLength = int64(len(bodyBytes))
 	}
 
 	return nil
@@ -163,13 +145,13 @@ func (p *Pipeline) deliverResponse(w http.ResponseWriter, clientReq *http.Reques
 			}
 		}
 
-		bodyBytes, err = readAllPooled(upstreamResp.Body)
-		if err != nil {
-			return err
+		if upstreamResp.Body != nil {
+			bodyBytes, err = readAllPooled(upstreamResp.Body)
+			if err != nil {
+				return err
+			}
+			upstreamResp.Body.Close()
 		}
-		upstreamResp.Body.Close()
-		upstreamResp.Body = bodyReader(bodyBytes)
-		upstreamResp.ContentLength = int64(len(bodyBytes))
 
 		for _, tapper := range tappers {
 			tapResponseBuffered(clientReq.Context(), upstreamResp.StatusCode, upstreamResp.Header, bodyBytes, tapper)
@@ -190,17 +172,17 @@ func (p *Pipeline) deliverResponse(w http.ResponseWriter, clientReq *http.Reques
 	}
 
 	reader := io.Reader(upstreamResp.Body)
-	var pipeWriters []*io.PipeWriter
+	var tapSinks []*asyncTapWriter
 	for _, tapper := range tappers {
-		pr, pw := io.Pipe()
-		pipeWriters = append(pipeWriters, pw)
-		go streamTap(clientReq.Context(), upstreamResp.StatusCode, upstreamResp.Header.Clone(), pr, tapper)
-		reader = io.TeeReader(reader, pw)
+		sink := newAsyncTapWriter(defaultTapChannelDepth)
+		tapSinks = append(tapSinks, sink)
+		startAsyncResponseTap(clientReq.Context(), upstreamResp.StatusCode, upstreamResp.Header.Clone(), sink, tapper)
+		reader = io.TeeReader(reader, sink)
 	}
 
 	err := copyResponseBody(w, reader)
-	for _, pw := range pipeWriters {
-		_ = pw.Close()
+	for _, sink := range tapSinks {
+		_ = sink.Close()
 	}
 	return err
 }
@@ -233,16 +215,6 @@ func copyResponseBody(w http.ResponseWriter, reader io.Reader) error {
 	}
 }
 
-func streamTap(ctx context.Context, statusCode int, header http.Header, body io.Reader, tapper ResponseTapper) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			log.Printf("response tapper panic: %v", rec)
-		}
-		_, _ = io.Copy(io.Discard, body)
-	}()
-	tapper.TapResponse(ctx, statusCode, header, body)
-}
-
 func tapRequestAsync(ctx context.Context, req *http.Request, tapper RequestTapper) {
 	reqCopy := cloneRequestForTap(req)
 	go func() {
@@ -269,7 +241,8 @@ func tapResponseBuffered(ctx context.Context, statusCode int, header http.Header
 }
 
 func cloneRequestForTap(req *http.Request) *http.Request {
-	clone := req.Clone(req.Context())
+	ctx := snapshotMetadataContext(req.Context())
+	clone := req.Clone(ctx)
 	clone.Body = http.NoBody
 	clone.GetBody = nil
 	return clone
@@ -305,16 +278,25 @@ func (p *Pipeline) buildUpstreamRequest(r *http.Request, target *url.URL) (*http
 	outReq.Header.Set("X-Forwarded-For", clientIP)
 	outReq.Header.Set("X-Real-IP", clientIP)
 
+	if payload, ok := capturedPayload(r); ok {
+		outReq.Body = payload.reader()
+		outReq.ContentLength = payload.len()
+		outReq.GetBody = func() (io.ReadCloser, error) {
+			return payload.reader(), nil
+		}
+		return outReq, nil
+	}
+
 	if outReq.Body != nil && outReq.Body != http.NoBody {
-		body, err := readAllPooled(outReq.Body)
+		payload, err := readBodyPooled(outReq.Body)
 		if err != nil {
 			return nil, err
 		}
 		outReq.Body.Close()
-		outReq.Body = bodyReader(body)
-		outReq.ContentLength = int64(len(body))
+		outReq.Body = payload.reader()
+		outReq.ContentLength = payload.len()
 		outReq.GetBody = func() (io.ReadCloser, error) {
-			return bodyReader(body), nil
+			return payload.reader(), nil
 		}
 	}
 
