@@ -13,6 +13,8 @@ type Pipeline struct {
 	transport      http.RoundTripper
 	requestChains  []*RequestChain
 	responseChains []*ResponseChain
+	tapStrategy    BackpressureStrategy
+	tapBufferDepth int
 }
 
 // New initializes the reverse proxy targeting a base upstream endpoint.
@@ -25,6 +27,15 @@ func New(targetURL string) *Pipeline {
 		target:    u,
 		transport: http.DefaultTransport,
 	}
+}
+
+// WithTapStrategy configures backpressure behavior for passive response tappers.
+func (p *Pipeline) WithTapStrategy(strategy BackpressureStrategy, bufferDepth int) *Pipeline {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.tapStrategy = strategy
+	p.tapBufferDepth = bufferDepth
+	return p
 }
 
 // WithTransport sets a custom RoundTripper for upstream requests.
@@ -145,4 +156,10 @@ func (p *Pipeline) snapshotTarget() (*url.URL, http.RoundTripper) {
 	defer p.mu.RUnlock()
 	targetCopy := *p.target
 	return &targetCopy, p.transport
+}
+
+func (p *Pipeline) snapshotTapSettings() (BackpressureStrategy, int) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.tapStrategy, p.tapBufferDepth
 }

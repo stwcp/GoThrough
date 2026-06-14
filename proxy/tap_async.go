@@ -7,32 +7,105 @@ import (
 	"net/http"
 )
 
+// BackpressureStrategy defines how passive tappers handle slow consumption rates.
+type BackpressureStrategy int
+
+const (
+	// StrategyBlock pauses the client response stream if a tapper's internal buffer fills up.
+	StrategyBlock BackpressureStrategy = iota
+	// StrategyDrop discards telemetry chunks when a tapper cannot keep up, protecting client latency.
+	StrategyDrop
+	// StrategyUnbounded buffers chunks in memory so tappers never block the client stream.
+	StrategyUnbounded
+)
+
 const defaultTapChannelDepth = 64
 
 type asyncTapWriter struct {
-	chunks chan []byte
+	strategy BackpressureStrategy
+	chunks   chan []byte
+	in       chan []byte
 }
 
-func newAsyncTapWriter(depth int) *asyncTapWriter {
+func newAsyncTapWriter(strategy BackpressureStrategy, depth int) *asyncTapWriter {
 	if depth <= 0 {
 		depth = defaultTapChannelDepth
 	}
-	return &asyncTapWriter{chunks: make(chan []byte, depth)}
+
+	w := &asyncTapWriter{
+		strategy: strategy,
+		chunks:   make(chan []byte, depth),
+	}
+
+	if strategy == StrategyUnbounded {
+		w.in = make(chan []byte, depth)
+		go w.unboundedPump()
+	}
+
+	return w
 }
 
 func (w *asyncTapWriter) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
+
 	chunk := make([]byte, len(p))
 	copy(chunk, p)
-	w.chunks <- chunk
+
+	switch w.strategy {
+	case StrategyDrop:
+		select {
+		case w.chunks <- chunk:
+		default:
+		}
+	case StrategyUnbounded:
+		w.in <- chunk
+	case StrategyBlock:
+		fallthrough
+	default:
+		w.chunks <- chunk
+	}
+
 	return len(p), nil
 }
 
 func (w *asyncTapWriter) Close() error {
-	close(w.chunks)
+	if w.strategy == StrategyUnbounded {
+		close(w.in)
+	} else {
+		close(w.chunks)
+	}
 	return nil
+}
+
+func (w *asyncTapWriter) unboundedPump() {
+	defer close(w.chunks)
+	var queue [][]byte
+
+	for {
+		var first []byte
+		var out chan<- []byte
+
+		if len(queue) > 0 {
+			first = queue[0]
+			out = w.chunks
+		}
+
+		select {
+		case item, ok := <-w.in:
+			if !ok {
+				for _, qItem := range queue {
+					w.chunks <- qItem
+				}
+				return
+			}
+			queue = append(queue, item)
+
+		case out <- first:
+			queue = queue[1:]
+		}
+	}
 }
 
 type chunkReader struct {

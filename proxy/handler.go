@@ -173,8 +173,9 @@ func (p *Pipeline) deliverResponse(w http.ResponseWriter, clientReq *http.Reques
 
 	reader := io.Reader(upstreamResp.Body)
 	var tapSinks []*asyncTapWriter
+	strategy, depth := p.snapshotTapSettings()
 	for _, tapper := range tappers {
-		sink := newAsyncTapWriter(defaultTapChannelDepth)
+		sink := newAsyncTapWriter(strategy, depth)
 		tapSinks = append(tapSinks, sink)
 		startAsyncResponseTap(clientReq.Context(), upstreamResp.StatusCode, upstreamResp.Header.Clone(), sink, tapper)
 		reader = io.TeeReader(reader, sink)

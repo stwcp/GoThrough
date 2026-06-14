@@ -193,7 +193,7 @@ func TestSlowResponseTapperDoesNotBlockClient(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		flusher := w.(http.Flusher)
-		for i := 0; i < 8; i++ {
+		for i := 0; i < 128; i++ {
 			_, _ = w.Write([]byte("data: chunk\n\n"))
 			flusher.Flush()
 		}
@@ -201,7 +201,7 @@ func TestSlowResponseTapperDoesNotBlockClient(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	slow := &slowResponseTapper{started: make(chan struct{})}
-	p := proxy.New(upstream.URL)
+	p := proxy.New(upstream.URL).WithTapStrategy(proxy.StrategyDrop, 4)
 	p.OnResponse(alwaysMatcher{}).Tap(slow)
 
 	server := httptest.NewServer(p.Handler())
