@@ -111,6 +111,27 @@ func main() {
 
 A runnable copy lives in [`examples/reference/main.go`](examples/reference/main.go).
 
+### Backpressure examples
+
+Both examples embed a mock SSE upstream so you can run them without an external API key.
+
+| Example | Command | Strategy | Ports |
+| --- | --- | --- | --- |
+| Reference (intercept + tap) | `make example` or `make example reference` | default (`StrategyBlock`) | `:8080` |
+| Telemetry / metrics | `make example telemetry-drop` | `StrategyDrop` (buffer 8) | proxy `:8080`, upstream `:9090` |
+| Compliance audit | `make example compliance-unbounded` | `StrategyUnbounded` (buffer 16) | proxy `:8081`, upstream `:9091` |
+
+After starting either example, stream through the proxy:
+
+```bash
+curl -N http://127.0.0.1:8080/stream   # telemetry-drop
+curl -N http://127.0.0.1:8081/stream   # compliance-unbounded
+```
+
+With `StrategyDrop`, the slow metrics tapper may skip chunks once its buffer fills; the `curl` stream still completes at full speed. With `StrategyUnbounded`, the audit tapper receives every chunk even when it falls behind, at the cost of temporary in-memory growth.
+
+Sources: [`examples/telemetry-drop/main.go`](examples/telemetry-drop/main.go), [`examples/compliance-unbounded/main.go`](examples/compliance-unbounded/main.go).
+
 ## Architecture notes
 
 **Stream splitting.** Streaming responses are duplicated with `io.TeeReader` into async tap sinks. The client path reads from the primary stream; tappers consume from a separate buffer according to the configured strategy.
@@ -140,7 +161,7 @@ The Makefile keeps local development and CI aligned on the same tool versions an
 | `make init` | `go mod tidy` / `go mod download`, then installs pinned tools into `./tools`. |
 | `make test` | `go test -race -count=1 ./...` — tests only, no lint. |
 | `make fmt` | `golangci-lint fmt` — format sources without running the full check. |
-| `make example` | Runs the reference proxy in [`examples/reference`](examples/reference/main.go) on `:8080`. |
+| `make example [name]` | Run an example (`reference`, `telemetry-drop`, `compliance-unbounded`). Defaults to `reference`. |
 | `make test-coverage` | Race tests with a coverage report under `internal/test/coverage/`. |
 
 `go mod tidy` runs as part of `make init`. There is no separate `tidy`, `clean`, or `run` target — this repo is a library, not a deployable service.

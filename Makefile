@@ -1,4 +1,4 @@
-# Library project: make check (default). Run the sample proxy with make example.
+# Library project: make check (default). Run examples with: make example [name]
 .PHONY: all init mod-sync git-hooks fmt check test test-coverage example
 
 GO ?= go
@@ -6,6 +6,15 @@ PKG := ./...
 COV_DIR := internal/test/coverage
 REPO_ROOT := $(abspath $(CURDIR))
 TOOLS_DIR := $(REPO_ROOT)/tools
+
+EXAMPLES := reference telemetry-drop compliance-unbounded
+
+ifeq (example,$(firstword $(MAKECMDGOALS)))
+  EXAMPLE_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+  $(eval $(EXAMPLE_ARGS):;@:)
+endif
+
+EXAMPLE_NAME := $(if $(EXAMPLE_ARGS),$(firstword $(EXAMPLE_ARGS)),reference)
 
 DLV       := $(TOOLS_DIR)/dlv
 GOLANGCI  := $(TOOLS_DIR)/golangci-lint
@@ -56,4 +65,10 @@ test-coverage:
 	@echo "Open $(COV_DIR)/coverage.html in a browser for line-level coverage."
 
 example:
-	$(GO) run ./examples/reference
+	@if [ -d "./examples/$(EXAMPLE_NAME)" ]; then \
+		$(GO) run ./examples/$(EXAMPLE_NAME); \
+	else \
+		echo "unknown example: $(EXAMPLE_NAME)"; \
+		echo "available: $(EXAMPLES)"; \
+		exit 1; \
+	fi
