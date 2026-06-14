@@ -1,6 +1,5 @@
-# Unit: make test / make check (no Docker, no integration build tag).
-# Integration: make test-integration (-tags=integration; Docker recommended — Postgres tests skip if unavailable).
-.PHONY: all format check test test-integration test-coverage build run tidy clean init mod-sync git-hooks gen schema-gen sqlc-gen db-migrate
+# Library project: make check (default). Run the sample proxy with make example.
+.PHONY: all init mod-sync git-hooks fmt check test test-coverage example
 
 GO ?= go
 PKG := ./...
@@ -8,19 +7,18 @@ COV_DIR := internal/test/coverage
 REPO_ROOT := $(abspath $(CURDIR))
 TOOLS_DIR := $(REPO_ROOT)/tools
 
-SQLC      := $(TOOLS_DIR)/sqlc
 DLV       := $(TOOLS_DIR)/dlv
 GOLANGCI  := $(TOOLS_DIR)/golangci-lint
 GOPLS     := $(TOOLS_DIR)/gopls
 GOIMPORTS := $(TOOLS_DIR)/goimports
 
-DLV_VER       ?= v1.26.3
-GOPLS_VER     ?= v0.22.0
-GOLANGCI_VER  ?= v2.12.0
-GOIMPORTS_VER ?= v0.44.0
+DLV_VER         ?= v1.26.3
+GOPLS_VER       ?= v0.22.0
+GOLANGCI_VER    ?= v2.12.0
+GOIMPORTS_VER   ?= v0.44.0
 GOVULNCHECK_VER ?= v1.3.0
 
-all: format
+all: check
 
 mod-sync:
 	$(GO) mod tidy
@@ -37,18 +35,16 @@ init: mod-sync
 git-hooks:
 	@git config core.hooksPath .githooks
 
-build:
-	$(GO) build -o ./bin/api ./cmd/server
-
-format:
+fmt:
 	$(GOLANGCI) fmt
-	$(MAKE) check
 
 test:
 	$(GO) test -race -count=1 $(PKG)
 
-test-integration:
-	$(GO) test -race -count=1 -tags=integration $(PKG)
+check:
+	$(GOLANGCI) run
+	$(GO) test -race -count=1 $(PKG)
+	$(GO) build $(PKG)
 
 test-coverage:
 	@mkdir -p $(COV_DIR)
@@ -59,17 +55,5 @@ test-coverage:
 	@$(GO) tool cover -html=$(COV_DIR)/coverage.out -o $(COV_DIR)/coverage.html
 	@echo "Open $(COV_DIR)/coverage.html in a browser for line-level coverage."
 
-check:
-	$(GOLANGCI) run
-	$(GO) test -race -count=1 $(PKG)
-	$(GO) build $(PKG)
-
-run:
-	if [ -f .env ]; then set -a && . ./.env && set +a; fi; $(GO) run ./cmd/server
-
-tidy:
-	$(GO) mod tidy
-
-clean:
-	$(GO) clean
-	rm -rf ./bin $(COV_DIR) coverage.out coverage.txt coverage.html
+example:
+	$(GO) run ./examples/reference
